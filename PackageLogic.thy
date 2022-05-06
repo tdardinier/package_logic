@@ -22,8 +22,6 @@ locale package_logic = sep_algebra +
 
 begin
 
-
-
 fun sat :: "'a aassertion \<Rightarrow> 'a \<Rightarrow> bool" where
   "sat (AStar A B) \<phi> \<longleftrightarrow> (\<exists>a b. Some \<phi> = a \<oplus> b \<and> sat A a \<and> sat B b)"
 | "sat (AImp b A) \<phi> \<longleftrightarrow> (b \<phi> \<longrightarrow> sat A \<phi>)"
@@ -87,13 +85,26 @@ definition intuitionistic where
 definition pure_remains where
   "pure_remains S \<longleftrightarrow> (\<forall>(a, u, p) \<in> S. pure a)"
 
+definition is_footprint_general :: "'a \<Rightarrow> ('a \<Rightarrow> 'a \<Rightarrow> 'a) \<Rightarrow> 'a aassertion \<Rightarrow> 'a aassertion \<Rightarrow> bool" where
+  "is_footprint_general w R A B \<longleftrightarrow> (\<forall>a b. sat A a \<and> Some b = a \<oplus> R a w \<longrightarrow> sat B b)"
 
-
-
+definition is_footprint_standard :: "'a \<Rightarrow> 'a aassertion \<Rightarrow> 'a aassertion \<Rightarrow> bool" where
+  "is_footprint_standard w A B \<longleftrightarrow> (\<forall>a b. sat A a \<and> Some b = a \<oplus> w \<longrightarrow> sat B b)"
 
 
 
 section Lemmas
+
+lemma is_footprint_generalI:
+  assumes "\<And>a b. sat A a \<and> Some b = a \<oplus> R a w \<Longrightarrow> sat B b"
+  shows "is_footprint_general w R A B"
+  using assms is_footprint_general_def by blast
+
+lemma is_footprint_standardI:
+  assumes "\<And>a b. sat A a \<and> Some b = a \<oplus> w \<Longrightarrow> sat B b"
+  shows "is_footprint_standard w A B"
+  using assms is_footprint_standard_def by blast
+
 
 lemma mono_pure_condI:
   assumes "\<And>\<phi>. b \<phi> \<longleftrightarrow> b |\<phi>|"
@@ -609,7 +620,7 @@ lemma unit_smaller:
   using greater_equiv unit_neutral by auto
 
 
-section Completeness
+section \<open>Lemmas for completeness\<close>
 
 lemma sat_star_exists_bigger:
   assumes "sat (AStar A B) \<phi>"
@@ -1159,9 +1170,11 @@ qed
 
 
 
-section Theorems
 
-theorem soundness:
+
+section Soundness
+
+theorem general_soundness:
   assumes "package_rhs \<phi> unit { (a, unit, T) |a T. (a, T) \<in> S } (\<lambda>_. True) A \<phi>' f S'"
       and "\<And>a T. (a, T) \<in> S \<Longrightarrow> mono_transformer T"
       and "wf_assertion A"
@@ -1239,16 +1252,60 @@ proof -
   ultimately show ?thesis by blast
 qed
 
+theorem soundness:
+  assumes "wf_assertion B"
+      and "\<And>a. sat A a \<Longrightarrow> a \<in> S"
+      and "\<And>a. a \<in> S \<Longrightarrow> mono_transformer (R a)"
+      and "package_rhs \<sigma> unit { (a, unit, R a) |a. a \<in> S } (\<lambda>_. True) B \<sigma>' w S'"
+      and "intuitionistic (sat B) \<or> pure_remains S'"
+    shows "stable w \<and> Some \<sigma> = \<sigma>' \<oplus> w \<and> is_footprint_general w R A B"
+proof -
+  let ?S = "{ (a, R a) |a. a \<in> S} "
+  have r: "Some \<sigma> = \<sigma>' \<oplus> w \<and> stable w \<and> (\<forall>(a, T)\<in>{(a, R a) |a. a \<in> S}. a ## T w \<longrightarrow> sat B (the (a \<oplus> T w)))"
+  proof (rule general_soundness)
+    show "package_rhs \<sigma> unit {(a, unit, T) |a T. (a, T) \<in> {(a, R a) |a. a \<in> S}} (\<lambda>_. True) B \<sigma>' w S'"
+      using assms(4) by auto
+    show "\<And>a T. (a, T) \<in> {(a, R a) |a. a \<in> S} \<Longrightarrow> mono_transformer T" using assms(3) by blast
+    show "wf_assertion B" by (simp add: assms(1))
+    show "intuitionistic (sat B) \<or> pure_remains S'" by (simp add: assms(5))
+  qed
+  moreover have "is_footprint_general w R A B"
+  proof (rule is_footprint_generalI)
+    fix a b assume asm: "sat A a \<and> Some b = a \<oplus> R a w"
+    then have "(a, R a) \<in> ?S"
+      using assms(2) by blast
+    then have "sat B (the (a \<oplus> R a w))" using r using asm defined_def by fastforce
+    then show "sat B b" by (metis asm option.sel)
+  qed
+  ultimately show ?thesis by blast
+qed
 
-theorem completeness:
+corollary soundness_paper:
+  assumes "wf_assertion B"
+      and "\<And>a. sat A a \<Longrightarrow> a \<in> S"
+      and "package_rhs \<sigma> unit { (a, unit, id) |a. a \<in> S } (\<lambda>_. True) B \<sigma>' w S'"
+      and "intuitionistic (sat B) \<or> pure_remains S'"
+    shows "stable w \<and> Some \<sigma> = \<sigma>' \<oplus> w \<and> is_footprint_standard w A B"
+proof -
+  have "stable w \<and> Some \<sigma> = \<sigma>' \<oplus> w \<and> is_footprint_general w (\<lambda>_. id) A B"
+    using assms soundness[of B A S "\<lambda>_. id" \<sigma> \<sigma>' w S']
+    by (simp add: mono_transformer_def)
+  then show ?thesis
+    using is_footprint_general_def is_footprint_standardI by fastforce
+qed
+
+
+
+section Completeness
+
+theorem general_completeness:
   assumes "\<And>a u T x. (a, u, T) \<in> S \<Longrightarrow> Some x = a \<oplus> T f \<Longrightarrow> sat A x"
       and "Some \<phi> = \<phi>' \<oplus> f"
       and "stable f"
-      and "valid_package_set S f"
+      and "valid_package_set S unit"
       and "wf_assertion A"
     shows "\<exists>S'. package_rhs \<phi> unit S (\<lambda>_. True) A \<phi>' f S'"
 proof -
-  thm package_rhs.AddFromOutside
   define S' where "S' = { (r, u, T) |a u T r. (a, u, T) \<in> S \<and> Some r = a \<oplus> (T f \<ominus> T unit) \<and> r ## u }"
   let ?pc = "\<lambda>_. True"
   have "\<exists>S''. package_rhs \<phi>' f S' ?pc A \<phi>' f S''"
@@ -1279,7 +1336,7 @@ proof -
       then obtain a' u' where "(a', u', T) \<in> S" "Some a = a' \<oplus> (T f \<ominus> T unit)" using S'_def by blast
       moreover have "T f \<ominus> T unit = T f"
       proof -
-        have "mono_transformer T" using \<open>valid_package_set S f\<close> valid_package_set_def \<open>(a', u', T) \<in> S\<close> by auto
+        have "mono_transformer T" using \<open>valid_package_set S unit\<close> valid_package_set_def \<open>(a', u', T) \<in> S\<close> by auto
         then show ?thesis
           by (metis commutative minus_default minus_equiv_def mono_transformer_def option.sel unit_neutral)
       qed
@@ -1307,6 +1364,49 @@ proof -
     by blast
 qed
 
+theorem completeness:
+  assumes "wf_assertion B"
+      and "stable w \<and> is_footprint_general w R A B"
+      and "Some \<sigma> = \<sigma>' \<oplus> w"
+      and "\<And>a. sat A a \<Longrightarrow> mono_transformer (R a)"
+    shows "\<exists>S'. package_rhs \<sigma> unit {(a, unit, R a) |a. sat A a} (\<lambda>_. True) B \<sigma>' w S'"
+proof -
+  let ?S = "{(a, unit, R a) |a. sat A a}"
+  have "\<exists>S'. package_rhs \<sigma> unit {(a, unit, R a) |a. sat A a} (\<lambda>_. True) B \<sigma>' w S'"
+  proof (rule general_completeness[of ?S w B \<sigma> \<sigma>'])
+    show "\<And>a u T x. (a, u, T) \<in> {(a, unit, R a) |a. sat A a} \<Longrightarrow> Some x = a \<oplus> T w \<Longrightarrow> sat B x"
+      using assms(2) is_footprint_general_def by blast
+    show "Some \<sigma> = \<sigma>' \<oplus> w" by (simp add: assms(3))
+    show "stable w" by (simp add: assms(2))
+    show "wf_assertion B" by (simp add: assms(1))
+
+    show "valid_package_set {(a, unit, R a) |a. sat A a} unit"
+    proof (rule valid_package_setI)
+      fix a u T assume asm0: "(a, u, T) \<in> {(a, unit, R a) |a. sat A a}"
+      then have "u = unit \<and> T = R a \<and> sat A a" by fastforce
+      then show "a ## u \<and>  |a|  \<succeq>  |u|  \<and> mono_transformer T \<and> a \<succeq>  |T unit|"
+        using assms(4) defined_def mono_transformer_def unit_core unit_neutral unit_smaller by auto
+    qed
+  qed
+  then show ?thesis by meson
+qed
+
+corollary completeness_paper:
+  assumes "wf_assertion B"
+      and "stable w \<and> is_footprint_standard w A B"
+      and "Some \<sigma> = \<sigma>' \<oplus> w"
+    shows "\<exists>S'. package_rhs \<sigma> unit {(a, unit, id) |a. sat A a} (\<lambda>_. True) B \<sigma>' w S'"
+proof -
+  have "\<exists>S'. package_rhs \<sigma> unit {(a, unit, (\<lambda>_. id) a) |a. sat A a} (\<lambda>_. True) B \<sigma>' w S'"
+    using assms(1)
+  proof (rule completeness)
+    show "stable w \<and> is_footprint_general w (\<lambda>a. id) A B"
+      using assms(2) is_footprint_general_def is_footprint_standard_def by force
+    show "Some \<sigma> = \<sigma>' \<oplus> w" by (simp add: assms(3))
+    show "\<And>a. sat A a \<Longrightarrow> mono_transformer id" using mono_transformer_def by auto
+  qed
+  then show ?thesis by meson
+qed
 
 
 end
